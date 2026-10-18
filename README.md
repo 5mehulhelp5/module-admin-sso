@@ -2,8 +2,7 @@
 
 > Provider-agnostic single sign-on for the Magento 2 admin panel (OIDC).
 
-[![CI](https://github.com/dmlab-work/module-admin-sso/actions/workflows/ci.yml/badge.svg)](https://github.com/dmlab-work/module-admin-sso/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/dmlab-work/module-admin-sso/graph/badge.svg)](https://codecov.io/gh/dmlab-work/module-admin-sso) [![Packagist](https://img.shields.io/packagist/dt/dmlab/module-admin-sso)](https://packagist.org/packages/dmlab/module-admin-sso)
-![License](https://img.shields.io/badge/license-OSL--3.0-green) ![Magento](https://img.shields.io/badge/Magento-2.4-orange) ![PHP](https://img.shields.io/badge/PHP-8.3--8.5-blue) ![Version](https://img.shields.io/badge/version-0.2.0-lightgrey)
+[![CI](https://github.com/dmlab-work/module-admin-sso/actions/workflows/ci.yml/badge.svg)](https://github.com/dmlab-work/module-admin-sso/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/dmlab-work/module-admin-sso/graph/badge.svg)](https://codecov.io/gh/dmlab-work/module-admin-sso) [![Packagist Version](https://img.shields.io/packagist/v/dmlab/module-admin-sso)](https://packagist.org/packages/dmlab/module-admin-sso) [![Downloads](https://img.shields.io/packagist/dt/dmlab/module-admin-sso)](https://packagist.org/packages/dmlab/module-admin-sso) [![PHP](https://img.shields.io/packagist/dependency-v/dmlab/module-admin-sso/php)](https://packagist.org/packages/dmlab/module-admin-sso) [![License](https://img.shields.io/packagist/l/dmlab/module-admin-sso)](LICENSE) ![Magento](https://img.shields.io/badge/Magento-2.4-orange)
 
 The admin-login **capability core**: it logs staff into the Magento admin backend over OIDC, but never references a concrete IdP. Install a provider plugin (`admin-sso-okta`, `admin-sso-azure`, …) that supplies the IdP; the plugin pulls this core, which in turn pulls the shared OIDC engine `sso-core`.
 
