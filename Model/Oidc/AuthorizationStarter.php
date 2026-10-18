@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -8,7 +9,10 @@ namespace DmLab\AdminSso\Model\Oidc;
 
 use DmLab\AdminSso\Model\ActiveProviderResolver;
 use DmLab\AdminSso\Model\Config;
+use DmLab\SsoCore\Api\AuthorizationParamsProviderInterface;
 use DmLab\SsoCore\Api\AuthorizationStateStorageInterface;
+use DmLab\SsoCore\Api\DiscoveryIssuerPolicyInterface;
+use DmLab\SsoCore\Api\ProviderPresetInterface;
 use DmLab\SsoCore\Model\Oidc\AuthorizationRequestFactory;
 use DmLab\SsoCore\Model\Oidc\DiscoveryClient;
 use Magento\Backend\Model\UrlInterface as BackendUrlInterface;
@@ -69,14 +73,20 @@ class AuthorizationStarter
         }
 
         $metadata = $this->discoveryClient->discover(
-            $preset->buildDiscoveryUrl($this->presetConfig())
+            $preset->buildDiscoveryUrl($this->presetConfig()),
+            $this->requiresIssuerMatch($preset)
         );
+
+        $extraParams = $preset instanceof AuthorizationParamsProviderInterface
+            ? $preset->getAuthorizationParams($this->presetConfig())
+            : [];
 
         $request = $this->authorizationRequestFactory->create(
             $metadata->getAuthorizationEndpoint(),
             $clientId,
             $this->callbackUrl(),
-            $preset->getDefaultScopes()
+            $preset->getDefaultScopes(),
+            $extraParams
         );
 
         $this->stateStorage->save($request);
@@ -96,6 +106,17 @@ class AuthorizationStarter
         return [
             'client_id' => $this->config->getClientId(),
         ];
+    }
+
+    /**
+     * Strict discovery issuer match unless the preset opts out (Entra verified-domain tenants).
+     *
+     * @param ProviderPresetInterface $preset
+     */
+    private function requiresIssuerMatch(ProviderPresetInterface $preset): bool
+    {
+        return !$preset instanceof DiscoveryIssuerPolicyInterface
+            || $preset->requiresIssuerMatch($this->presetConfig());
     }
 
     /**

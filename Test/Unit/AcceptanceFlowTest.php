@@ -1,12 +1,14 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
 namespace DmLab\AdminSso\Test\Unit;
 
 use DmLab\AdminSso\Block\Adminhtml\Login\Sso;
+use DmLab\AdminSso\Controller\Adminhtml\Sso\Callback;
 use DmLab\AdminSso\Model\ActiveProviderResolver;
 use DmLab\AdminSso\Model\AdminSessionCreator;
 use DmLab\AdminSso\Model\Config;
@@ -30,12 +32,18 @@ use DmLab\SsoCore\Model\Oidc\ProviderMetadata;
 use DmLab\SsoCore\Model\Oidc\TokenClient;
 use DmLab\SsoCore\Model\Oidc\TokenResponse;
 use Jose\Component\Core\JWKSet;
+use Magento\Backend\App\Action\Context as ActionContext;
 use Magento\Backend\Model\Auth\Session as AuthSession;
 use Magento\Backend\Model\UrlInterface as BackendUrlInterface;
+use Magento\Backend\Model\View\Result\Redirect;
+use Magento\Framework\App\RequestInterface;
 use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Framework\Encryption\EncryptorInterface;
+use Magento\Framework\Escaper;
 use Magento\Framework\Event\ManagerInterface as EventManager;
 use Magento\Framework\Math\Random;
+use Magento\Framework\Message\ManagerInterface as MessageManager;
 use Magento\Framework\TestFramework\Unit\Helper\ObjectManager;
 use Magento\Framework\View\Element\Template\Context;
 use Magento\User\Model\ResourceModel\User as UserResource;
@@ -46,6 +54,7 @@ use Magento\User\Model\UserFactory;
 use Magento\Authorization\Model\Role;
 use Magento\Authorization\Model\RoleFactory;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
 
 /**
  * End-to-end acceptance test for the whole admin-SSO orchestration.
@@ -109,17 +118,18 @@ class AcceptanceFlowTest extends TestCase
         self::assertSame(self::EMAIL, $identity->getEmail());
         self::assertSame(['admins'], $identity->getGroups());
 
-        // 5. JIT provision: no local admin matches → a new one is created.
+        // 5. Role resolution before provisioning: "admins" maps to ACL role 5 (which exists).
         $userResource = $this->createMock(UserResource::class);
+        $roleAssigner = new RoleAssigner($config, new MappingEngine(), $userResource, $this->roleFactory('5'));
+        $roleId = $roleAssigner->resolve($identity);
+        self::assertSame('5', $roleId);
+
+        // 6. JIT provision (no local admin matches → a new one is created), then assign the role.
         $setDataCalls = [];
         $user = $this->newUser($setDataCalls);
-        $provisioner = $this->provisioner($userResource, $user);
-        $provisioned = $provisioner->provision($identity);
+        $provisioned = $this->provisioner($userResource, $user)->provision($identity);
         self::assertSame($user, $provisioned);
-
-        // 6. Role assignment: the "admins" group maps to ACL role 5 (which exists).
-        $roleAssigner = new RoleAssigner($config, new MappingEngine(), $userResource, $this->roleFactory('5'));
-        $roleAssigner->assign($provisioned, $identity);
+        $roleAssigner->assign($provisioned, $roleId);
 
         // 7. Session establishment: user logged in, 2FA satisfied, login recorded.
         // setUser is a magic setter routed through SessionManager::__call.
@@ -142,6 +152,53 @@ class AcceptanceFlowTest extends TestCase
         self::assertSame(self::EMAIL, $createPayload['email']);
         self::assertSame(self::SUBJECT, $createPayload[UserProvisioner::SUBJECT_FIELD]);
         self::assertContains(['role_id', 5], $setDataCalls, 'admins group must assign ACL role 5');
+    }
+
+    public function testUnmappedGroupsRefuseLoginWithoutProvisioning(): void
+    {
+        unset($this->configValues['dmlab_admin_sso/general/default_role']);
+        $config = $this->config();
+        $resolver = new ActiveProviderResolver($this->scopeConfig(), new PresetRegistry([$this->stubPreset()]));
+        $stateStorage = $this->inMemoryStateStorage();
+        $metadata = $this->metadata();
+        $state = $this->stateFromUrl($this->starter($config, $resolver, $stateStorage, $metadata)->start());
+
+        $userResource = $this->createMock(UserResource::class);
+        $userResource->expects(self::never())->method('save');
+        $provisioner = $this->createMock(UserProvisioner::class);
+        $provisioner->expects(self::never())->method('provision');
+        $sessionCreator = $this->createMock(AdminSessionCreator::class);
+        $sessionCreator->expects(self::never())->method('create');
+
+        $request = $this->createStub(RequestInterface::class);
+        $request->method('getParam')->willReturnCallback(
+            static fn(string $name) => ['code' => 'auth-code', 'state' => $state][$name] ?? null
+        );
+        $redirect = $this->createMock(Redirect::class);
+        $redirect->expects(self::once())->method('setPath')->with('adminhtml/auth/login');
+        $redirectFactory = $this->createStub(RedirectFactory::class);
+        $redirectFactory->method('create')->willReturn($redirect);
+        $messageManager = $this->createMock(MessageManager::class);
+        $messageManager->expects(self::once())
+            ->method('addErrorMessage')
+            ->with('No admin role is mapped for your identity provider groups. Contact your administrator.');
+        $context = $this->createStub(ActionContext::class);
+        $context->method('getRequest')->willReturn($request);
+        $context->method('getResultRedirectFactory')->willReturn($redirectFactory);
+        $context->method('getMessageManager')->willReturn($messageManager);
+
+        $controller = new Callback(
+            $context,
+            $this->callbackHandler($config, $resolver, $stateStorage, $metadata, ['engineering']),
+            $provisioner,
+            new RoleAssigner($config, new MappingEngine(), $userResource, $this->roleFactory('5')),
+            $sessionCreator,
+            $this->createStub(BackendUrlInterface::class),
+            $this->createStub(Escaper::class),
+            $this->createStub(LoggerInterface::class)
+        );
+
+        self::assertSame($redirect, $controller->execute());
     }
 
     /**
@@ -305,7 +362,8 @@ class AcceptanceFlowTest extends TestCase
         Config $config,
         ActiveProviderResolver $resolver,
         AuthorizationStateStorageInterface $stateStorage,
-        ProviderMetadata $metadata
+        ProviderMetadata $metadata,
+        array $groups = ['admins']
     ): CallbackHandler {
         $discovery = $this->createStub(DiscoveryClient::class);
         $discovery->method('discover')->willReturn($metadata);
@@ -314,14 +372,14 @@ class AcceptanceFlowTest extends TestCase
         $tokenClient->method('exchangeCode')->willReturn(new TokenResponse('the-id-token'));
 
         $jwksClient = $this->createStub(JwksClient::class);
-        $jwksClient->method('getKeySet')->willReturn(new JWKSet([]));
+        $jwksClient->method('getKeySetForToken')->willReturn(new JWKSet([]));
 
         $validator = $this->createStub(IdTokenValidator::class);
         $validator->method('validate')->willReturn([
             'sub' => self::SUBJECT,
             'email' => self::EMAIL,
             'name' => 'Jane Doe',
-            'groups' => ['admins'],
+            'groups' => $groups,
         ]);
 
         $backendUrl = $this->createStub(BackendUrlInterface::class);

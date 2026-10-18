@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -20,7 +21,8 @@ use Magento\User\Model\UserFactory;
  * Resolution order mirrors the suite contract: match by the stored IdP subject
  * (`sub`) first — the stable re-login key — then fall back to email, adopting an
  * existing local admin and linking it to the subject on first SSO login. When
- * neither matches, a fresh admin user is created (JIT).
+ * neither matches, a fresh admin user is created (JIT). Email adoption requires
+ * an IdP-verified email; an unverified match is refused, never linked.
  *
  * Provider-neutral: the identity is already normalized by sso-core, so no
  * IdP-specific claim handling lives here. Role assignment is a later task; this
@@ -62,8 +64,8 @@ class UserProvisioner
      *
      * @param IdentityInterface $identity verified identity from sso-core
      * @return User the linked or newly created admin user (persisted)
-     * @throws LocalizedException when a matched admin is disabled, or when a new
-     *         user must be created but the IdP released no email to key it on
+     * @throws LocalizedException when a matched admin is disabled, an email match is
+     *         unverified, or a new user must be created but the IdP released no email
      */
     public function provision(IdentityInterface $identity): User
     {
@@ -77,6 +79,7 @@ class UserProvisioner
         if ($email !== null) {
             $byEmail = $this->loadByField('email', $email);
             if ($byEmail !== null) {
+                $this->assertEmailVerified($identity);
                 $this->assertActive($byEmail);
                 $this->assertAdoptable($byEmail);
                 return $this->linkSubject($byEmail, $identity->getSubjectId());
@@ -117,6 +120,26 @@ class UserProvisioner
         if ((int)$user->getData('is_active') !== 1) {
             throw new LocalizedException(
                 __('This admin account is disabled. Contact your administrator.')
+            );
+        }
+    }
+
+    /**
+     * Refuse adoption by an email the IdP did not verify.
+     *
+     * An unverified address could be claimed by anyone, so it must not grant an existing admin account.
+     *
+     * @param IdentityInterface $identity
+     * @throws LocalizedException when the IdP did not verify the email
+     */
+    private function assertEmailVerified(IdentityInterface $identity): void
+    {
+        if (!$identity->isEmailVerified()) {
+            throw new LocalizedException(
+                __(
+                    'An admin account with this email exists, '
+                    . 'but your identity provider did not verify the email address.'
+                )
             );
         }
     }

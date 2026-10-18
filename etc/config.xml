@@ -2,6 +2,7 @@
 <!--
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -11,7 +12,8 @@
             <general>
                 <enabled>0</enabled>
                 <enforce_sso>0</enforce_sso>
-                <break_glass>1</break_glass>
+                <break_glass>0</break_glass>
+                <break_glass_usernames/>
             </general>
         </dmlab_admin_sso>
     </default>

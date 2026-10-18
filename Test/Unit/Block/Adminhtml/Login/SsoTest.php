@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -11,12 +12,27 @@ use DmLab\AdminSso\Model\ActiveProviderResolver;
 use DmLab\AdminSso\Model\Config;
 use DmLab\SsoCore\Api\ProviderPresetInterface;
 use Magento\Backend\Model\UrlInterface as BackendUrlInterface;
+use Magento\Framework\Phrase;
+use Magento\Framework\Phrase\RendererInterface;
 use Magento\Framework\TestFramework\Unit\Helper\ObjectManager;
 use Magento\Framework\View\Element\Template\Context;
 use PHPUnit\Framework\TestCase;
 
 class SsoTest extends TestCase
 {
+    /** @var RendererInterface|null Restored after each test. */
+    private ?RendererInterface $originalRenderer = null;
+
+    protected function setUp(): void
+    {
+        $this->originalRenderer = Phrase::getRenderer();
+    }
+
+    protected function tearDown(): void
+    {
+        Phrase::setRenderer($this->originalRenderer);
+    }
+
     private function preset(string $buttonLabel, ?string $iconUrl): ProviderPresetInterface
     {
         $preset = $this->createStub(ProviderPresetInterface::class);
@@ -52,6 +68,19 @@ class SsoTest extends TestCase
         self::assertTrue($block->isAvailable());
         self::assertSame('Sign in with Okta', $block->getButtonLabel());
         self::assertSame('https://cdn/okta.svg', $block->getButtonIconUrl());
+    }
+
+    public function testButtonLabelIsTranslated(): void
+    {
+        $renderer = $this->createStub(RendererInterface::class);
+        $renderer->method('render')->willReturnCallback(
+            static fn (array $source): string => 'Anmelden mit ' . end($source)
+        );
+        Phrase::setRenderer($renderer);
+
+        $block = $this->block(true, $this->preset('Okta', null));
+
+        self::assertSame('Anmelden mit Okta', $block->getButtonLabel());
     }
 
     public function testHiddenWhenModuleDisabled(): void

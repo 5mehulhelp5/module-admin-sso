@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -34,6 +35,9 @@ class Config
 
     /** Whether the break-glass local-admin path stays available under enforce. */
     public const XML_PATH_BREAK_GLASS = 'dmlab_admin_sso/general/break_glass';
+
+    /** Admin usernames allowed native login under break-glass, newline/comma-separated. */
+    public const XML_PATH_BREAK_GLASS_USERNAMES = 'dmlab_admin_sso/general/break_glass_usernames';
 
     /** IdP-group → ACL-role rules, one `group=role_id` per line. */
     public const XML_PATH_GROUP_ROLE_MAP = 'dmlab_admin_sso/general/group_role_map';
@@ -99,6 +103,29 @@ class Config
     }
 
     /**
+     * Break-glass allowlist: trimmed, lowercased, unique admin usernames.
+     *
+     * @return string[]
+     */
+    public function getBreakGlassUsernames(): array
+    {
+        $raw = $this->scopeConfig->getValue(self::XML_PATH_BREAK_GLASS_USERNAMES);
+        if (!is_string($raw)) {
+            return [];
+        }
+
+        $usernames = [];
+        foreach (preg_split('/[\r\n,]+/', $raw) ?: [] as $username) {
+            $username = mb_strtolower(trim($username));
+            if ($username !== '') {
+                $usernames[$username] = $username;
+            }
+        }
+
+        return array_values($usernames);
+    }
+
+    /**
      * Parsed IdP-group → ACL-role-id map.
      *
      * Reads the `group=role_id` lines; blank lines and `#` comments are ignored,
@@ -132,8 +159,9 @@ class Config
     }
 
     /**
-     * ACL role id used as the fallback when no IdP group matches a rule, or null
-     * when unset (in which case an unmapped identity gets no role — deny).
+     * Fallback ACL role id for identities that match no group rule.
+     *
+     * Null when unset, in which case SSO login is refused for an unmapped identity.
      */
     public function getDefaultRoleId(): ?string
     {

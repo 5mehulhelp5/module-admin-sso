@@ -1,12 +1,14 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
 namespace DmLab\AdminSso\Test\Unit\Model;
 
 use DmLab\AdminSso\Model\UserProvisioner;
+use DmLab\SsoCore\Api\Data\IdentityInterface;
 use DmLab\SsoCore\Model\Data\Identity;
 use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\Math\Random;
@@ -128,7 +130,7 @@ class UserProvisionerTest extends TestCase
         $this->userResource->expects(self::once())->method('save')->with($existing);
         $this->userFactory->expects(self::never())->method('create');
 
-        $identity = new Identity('sub-1', 'User@Example.com', 'User One', []);
+        $identity = new Identity('sub-1', 'User@Example.com', 'User One', [], true);
 
         self::assertSame($existing, $this->provisioner->provision($identity));
     }
@@ -283,7 +285,7 @@ class UserProvisionerTest extends TestCase
         $this->expectException(LocalizedException::class);
         $this->expectExceptionMessage('This admin account is disabled. Contact your administrator.');
 
-        $this->provisioner->provision(new Identity('sub-1', 'user@example.com', 'User One', []));
+        $this->provisioner->provision(new Identity('sub-1', 'user@example.com', 'User One', [], true));
     }
 
     /**
@@ -318,7 +320,7 @@ class UserProvisionerTest extends TestCase
             'An admin account with this email is already linked to a different identity.'
         );
 
-        $this->provisioner->provision(new Identity('sub-NEW', 'user@example.com', 'User One', []));
+        $this->provisioner->provision(new Identity('sub-NEW', 'user@example.com', 'User One', [], true));
     }
 
     /** Subject lookup runs first with the subject column; email lookup uses the normalized email. */
@@ -350,7 +352,7 @@ class UserProvisionerTest extends TestCase
         $this->userFactory->expects(self::never())->method('create');
 
         // Mixed-case email on the identity must be lower-cased for the lookup.
-        $this->provisioner->provision(new Identity('sub-1', 'User@Example.COM', 'User One', []));
+        $this->provisioner->provision(new Identity('sub-1', 'User@Example.COM', 'User One', [], true));
 
         self::assertSame([UserProvisioner::SUBJECT_FIELD, 'sub-1'], $filters[0]);
         self::assertSame(['email', 'user@example.com'], $filters[1]);
@@ -396,11 +398,104 @@ class UserProvisionerTest extends TestCase
     }
 
     /**
+     * Identity mock with the given verified flag.
+     *
+     * @return IdentityInterface&\PHPUnit\Framework\MockObject\Stub
+     */
+    private function identity(string $subject, ?string $email, bool $verified)
+    {
+        $identity = $this->createStub(IdentityInterface::class);
+        $identity->method('getSubjectId')->willReturn($subject);
+        $identity->method('getEmail')->willReturn($email);
+        $identity->method('getName')->willReturn('User One');
+        $identity->method('getGroups')->willReturn([]);
+        $identity->method('isEmailVerified')->willReturn($verified);
+
+        return $identity;
+    }
+
+    public function testVerifiedEmailMatchIsAdoptedAndLinked(): void
+    {
+        $existing = $this->createMock(User::class);
+        $existing->method('getId')->willReturn(7);
+        $existing->method('getData')->willReturnCallback(
+            static fn ($field) => $field === 'is_active' ? 1 : null
+        );
+        $existing->expects(self::once())
+            ->method('setData')
+            ->with(UserProvisioner::SUBJECT_FIELD, 'sub-1');
+
+        $this->collectionFactory->expects(self::exactly(2))
+            ->method('create')
+            ->willReturnOnConsecutiveCalls(
+                $this->collectionReturning($this->emptyUser()),
+                $this->collectionReturning($existing)
+            );
+        $this->userResource->expects(self::once())->method('save')->with($existing);
+        $this->userFactory->expects(self::never())->method('create');
+
+        self::assertSame(
+            $existing,
+            $this->provisioner->provision($this->identity('sub-1', 'user@example.com', true))
+        );
+    }
+
+    public function testUnverifiedEmailMatchIsRefusedWithoutLinking(): void
+    {
+        $existing = $this->createMock(User::class);
+        $existing->method('getId')->willReturn(7);
+        $existing->method('getData')->willReturnCallback(
+            static fn ($field) => $field === 'is_active' ? 1 : null
+        );
+        $existing->expects(self::never())->method('setData');
+
+        $this->collectionFactory->expects(self::exactly(2))
+            ->method('create')
+            ->willReturnOnConsecutiveCalls(
+                $this->collectionReturning($this->emptyUser()),
+                $this->collectionReturning($existing)
+            );
+        $this->userResource->expects(self::never())->method('save');
+        $this->userFactory->expects(self::never())->method('create');
+
+        $this->expectException(LocalizedException::class);
+        $this->expectExceptionMessage(
+            'An admin account with this email exists, but your identity provider did not verify the email address.'
+        );
+
+        $this->provisioner->provision($this->identity('sub-1', 'user@example.com', false));
+    }
+
+    public function testUnverifiedEmailWithoutMatchStillCreatesUser(): void
+    {
+        $captured = $this->captureCreatedUserData($this->identity('sub-9', 'new@example.com', false));
+
+        self::assertSame('new@example.com', $captured['email']);
+        self::assertSame('sub-9', $captured[UserProvisioner::SUBJECT_FIELD]);
+    }
+
+    public function testSubjectMatchIgnoresVerifiedFlag(): void
+    {
+        $existing = $this->activeUser(5);
+
+        $this->collectionFactory->expects(self::once())
+            ->method('create')
+            ->willReturn($this->collectionReturning($existing));
+        $this->userResource->expects(self::never())->method('save');
+        $this->userFactory->expects(self::never())->method('create');
+
+        self::assertSame(
+            $existing,
+            $this->provisioner->provision($this->identity('sub-1', 'user@example.com', false))
+        );
+    }
+
+    /**
      * Drive the create path (both lookups miss) and return the data set on the new user.
      *
      * @return array<string,mixed>
      */
-    private function captureCreatedUserData(Identity $identity): array
+    private function captureCreatedUserData(IdentityInterface $identity): array
     {
         // Subject, email, and username-uniqueness lookups all miss.
         $this->collectionFactory->expects(self::exactly(3))

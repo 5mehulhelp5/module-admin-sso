@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -34,6 +35,8 @@ class Authentication extends CoreAuthentication
     private const SSO_OPEN_ACTIONS = ['start', 'callback'];
 
     /**
+     * Open the SSO start/callback actions to unauthenticated requests.
+     *
      * @param AbstractAction $subject
      * @param \Closure $proceed
      * @param RequestInterface $request

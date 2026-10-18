@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -9,7 +10,9 @@ namespace DmLab\AdminSso\Test\Unit\Model\Oidc;
 use DmLab\AdminSso\Model\ActiveProviderResolver;
 use DmLab\AdminSso\Model\Config;
 use DmLab\AdminSso\Model\Oidc\AuthorizationStarter;
+use DmLab\SsoCore\Api\AuthorizationParamsProviderInterface;
 use DmLab\SsoCore\Api\AuthorizationStateStorageInterface;
+use DmLab\SsoCore\Api\DiscoveryIssuerPolicyInterface;
 use DmLab\SsoCore\Api\ProviderPresetInterface;
 use DmLab\SsoCore\Model\Oidc\AuthorizationRequest;
 use DmLab\SsoCore\Model\Oidc\AuthorizationRequestFactory;
@@ -32,7 +35,7 @@ class AuthorizationStarterTest extends TestCase
     /** @var ActiveProviderResolver&Stub */
     private $resolver;
 
-    /** @var DiscoveryClient&Stub */
+    /** @var DiscoveryClient&MockObject */
     private $discoveryClient;
 
     /** @var BackendUrlInterface&Stub */
@@ -51,7 +54,7 @@ class AuthorizationStarterTest extends TestCase
     {
         $this->config = $this->createStub(Config::class);
         $this->resolver = $this->createStub(ActiveProviderResolver::class);
-        $this->discoveryClient = $this->createStub(DiscoveryClient::class);
+        $this->discoveryClient = $this->createMock(DiscoveryClient::class);
         $this->backendUrl = $this->createStub(BackendUrlInterface::class);
         $this->requestFactory = $this->createMock(AuthorizationRequestFactory::class);
         $this->stateStorage = $this->createMock(AuthorizationStateStorageInterface::class);
@@ -75,19 +78,31 @@ class AuthorizationStarterTest extends TestCase
         return $preset;
     }
 
-    public function testStartBuildsAuthUrlAndPersistsState(): void
+    private function metadata(): ProviderMetadata
+    {
+        return new ProviderMetadata(
+            'https://idp.example',
+            'https://idp.example/authorize',
+            'https://idp.example/token',
+            'https://idp.example/jwks'
+        );
+    }
+
+    private function givenActive(ProviderPresetInterface $preset): void
     {
         $this->config->method('isEnabled')->willReturn(true);
         $this->config->method('getClientId')->willReturn('cid');
-        $this->resolver->method('getActive')->willReturn($this->preset());
+        $this->resolver->method('getActive')->willReturn($preset);
         $this->backendUrl->method('getUrl')->willReturn(self::CALLBACK_URL);
-        $this->discoveryClient->method('discover')
-            ->willReturn(new ProviderMetadata(
-                'https://idp.example',
-                'https://idp.example/authorize',
-                'https://idp.example/token',
-                'https://idp.example/jwks'
-            ));
+    }
+
+    public function testStartBuildsAuthUrlAndPersistsState(): void
+    {
+        $this->givenActive($this->preset());
+        $this->discoveryClient->expects(self::once())
+            ->method('discover')
+            ->with('https://idp.example/.well-known/openid-configuration', true)
+            ->willReturn($this->metadata());
 
         $request = new AuthorizationRequest(self::AUTH_URL, 'abc', 'nnn', 'vvv');
         $this->requestFactory->expects(self::once())
@@ -96,7 +111,8 @@ class AuthorizationStarterTest extends TestCase
                 'https://idp.example/authorize',
                 'cid',
                 self::CALLBACK_URL,
-                ['openid', 'email', 'groups']
+                ['openid', 'email', 'groups'],
+                []
             )
             ->willReturn($request);
 
@@ -107,9 +123,81 @@ class AuthorizationStarterTest extends TestCase
         self::assertSame(self::AUTH_URL, $this->starter->start());
     }
 
+    public function testStartPassesPresetAuthorizationParams(): void
+    {
+        $preset = $this->createMockForIntersectionOfInterfaces(
+            [ProviderPresetInterface::class, AuthorizationParamsProviderInterface::class]
+        );
+        $preset->method('buildDiscoveryUrl')->willReturn('https://idp.example/.well-known/openid-configuration');
+        $preset->method('getDefaultScopes')->willReturn(['openid']);
+        $preset->expects(self::once())
+            ->method('getAuthorizationParams')
+            ->with(['client_id' => 'cid'])
+            ->willReturn(['hd' => 'example.com']);
+
+        $this->givenActive($preset);
+        $this->discoveryClient->expects(self::once())->method('discover')->willReturn($this->metadata());
+
+        $request = new AuthorizationRequest(self::AUTH_URL, 'abc', 'nnn', 'vvv');
+        $this->requestFactory->expects(self::once())
+            ->method('create')
+            ->with('https://idp.example/authorize', 'cid', self::CALLBACK_URL, ['openid'], ['hd' => 'example.com'])
+            ->willReturn($request);
+        $this->stateStorage->expects(self::once())->method('save')->with($request);
+
+        self::assertSame(self::AUTH_URL, $this->starter->start());
+    }
+
+    public function testStartPropagatesReservedParamRejection(): void
+    {
+        $preset = $this->createStubForIntersectionOfInterfaces(
+            [ProviderPresetInterface::class, AuthorizationParamsProviderInterface::class]
+        );
+        $preset->method('buildDiscoveryUrl')->willReturn('https://idp.example/.well-known/openid-configuration');
+        $preset->method('getDefaultScopes')->willReturn(['openid']);
+        $preset->method('getAuthorizationParams')->willReturn(['state' => 'forged']);
+
+        $this->givenActive($preset);
+        $this->discoveryClient->expects(self::once())->method('discover')->willReturn($this->metadata());
+        $this->requestFactory->expects(self::once())
+            ->method('create')
+            ->willThrowException(new \InvalidArgumentException('reserved'));
+        $this->stateStorage->expects(self::never())->method('save');
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->starter->start();
+    }
+
+    public function testStartHonoursIssuerPolicyOptOut(): void
+    {
+        $preset = $this->createMockForIntersectionOfInterfaces(
+            [ProviderPresetInterface::class, DiscoveryIssuerPolicyInterface::class]
+        );
+        $preset->method('buildDiscoveryUrl')->willReturn('https://idp.example/.well-known/openid-configuration');
+        $preset->method('getDefaultScopes')->willReturn(['openid']);
+        $preset->expects(self::once())
+            ->method('requiresIssuerMatch')
+            ->with(['client_id' => 'cid'])
+            ->willReturn(false);
+
+        $this->givenActive($preset);
+        $this->discoveryClient->expects(self::once())
+            ->method('discover')
+            ->with('https://idp.example/.well-known/openid-configuration', false)
+            ->willReturn($this->metadata());
+        $this->requestFactory->expects(self::once())
+            ->method('create')
+            ->willReturn(new AuthorizationRequest(self::AUTH_URL, 'abc', 'nnn', 'vvv'));
+        $this->stateStorage->expects(self::once())->method('save');
+
+        self::assertSame(self::AUTH_URL, $this->starter->start());
+    }
+
     public function testStartThrowsWhenDisabled(): void
     {
         $this->config->method('isEnabled')->willReturn(false);
+        $this->discoveryClient->expects(self::never())->method('discover');
         $this->requestFactory->expects(self::never())->method('create');
         $this->stateStorage->expects(self::never())->method('save');
 
@@ -123,6 +211,7 @@ class AuthorizationStarterTest extends TestCase
     {
         $this->config->method('isEnabled')->willReturn(true);
         $this->resolver->method('getActive')->willReturn(null);
+        $this->discoveryClient->expects(self::never())->method('discover');
         $this->requestFactory->expects(self::never())->method('create');
         $this->stateStorage->expects(self::never())->method('save');
 
@@ -137,6 +226,7 @@ class AuthorizationStarterTest extends TestCase
         $this->config->method('isEnabled')->willReturn(true);
         $this->config->method('getClientId')->willReturn(null);
         $this->resolver->method('getActive')->willReturn($this->preset());
+        $this->discoveryClient->expects(self::never())->method('discover');
         $this->requestFactory->expects(self::never())->method('create');
         $this->stateStorage->expects(self::never())->method('save');
 

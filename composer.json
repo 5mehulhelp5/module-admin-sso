@@ -7,10 +7,18 @@
     "require": {
         "php": "~8.3.0||~8.4.0||~8.5.0",
         "magento/framework": ">=103.0",
-        "dmlab/module-sso-core": "^0.1.1"
+        "magento/module-authorization": ">=100.4",
+        "magento/module-backend": ">=102.0",
+        "magento/module-config": ">=101.2",
+        "magento/module-user": ">=101.2",
+        "dmlab/module-sso-core": "^0.2.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^12.0"
+        "phpunit/phpunit": "^12.0",
+        "magento/module-two-factor-auth": "*"
+    },
+    "suggest": {
+        "magento/module-two-factor-auth": "Grants the 2FA session to SSO logins so the IdP MFA is not repeated"
     },
     "autoload": {
         "files": [

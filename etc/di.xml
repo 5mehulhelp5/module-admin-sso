@@ -2,6 +2,7 @@
 <!--
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -15,9 +16,17 @@
     <!-- Persist the one-time OIDC authorization state in the admin session. -->
     <preference for="DmLab\SsoCore\Api\AuthorizationStateStorageInterface"
                 type="DmLab\AdminSso\Model\Session\AuthorizationStateStorage"/>
-    <!-- Enforce-SSO: block native admin login (break-glass stays open) when enforced. -->
-    <type name="Magento\Backend\Model\Auth">
+    <!-- Enforce-SSO: block password login (admin form + REST admin token) unless break-glass allowlisted. -->
+    <type name="Magento\User\Model\User">
         <plugin name="dmlab_admin_sso_enforce"
                 type="DmLab\AdminSso\Plugin\Backend\EnforceSso"/>
+    </type>
+    <!-- Keep the client secret out of app/etc/config.php on app:config:dump. -->
+    <type name="Magento\Config\Model\Config\TypePool">
+        <arguments>
+            <argument name="sensitive" xsi:type="array">
+                <item name="dmlab_admin_sso/general/client_secret" xsi:type="string">1</item>
+            </argument>
+        </arguments>
     </type>
 </config>

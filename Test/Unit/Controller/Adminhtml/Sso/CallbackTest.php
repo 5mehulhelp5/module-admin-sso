@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -122,21 +123,61 @@ class CallbackTest extends TestCase
 
         $identity = new Identity('user-1', 'user@example.com', 'User One', ['admins']);
         $user = $this->createStub(User::class);
+        $calls = [];
 
         $this->handler->expects(self::once())
             ->method('handle')
             ->with('the-code', 'the-state')
             ->willReturn($identity);
+        $this->roleAssigner->expects(self::once())
+            ->method('resolve')
+            ->with($identity)
+            ->willReturnCallback(function () use (&$calls): string {
+                $calls[] = 'resolve';
+                return '5';
+            });
         $this->userProvisioner->expects(self::once())
             ->method('provision')
             ->with($identity)
-            ->willReturn($user);
-        $this->roleAssigner->expects(self::once())->method('assign')->with($user, $identity);
+            ->willReturnCallback(function () use (&$calls, $user): User {
+                $calls[] = 'provision';
+                return $user;
+            });
+        $this->roleAssigner->expects(self::once())
+            ->method('assign')
+            ->with($user, '5')
+            ->willReturnCallback(function () use (&$calls): void {
+                $calls[] = 'assign';
+            });
         $this->sessionCreator->expects(self::once())->method('create')->with($user);
 
         $this->redirect->expects(self::once())->method('setPath')->with('adminhtml/dashboard');
         $this->messageManager->expects(self::never())->method('addErrorMessage');
         $this->logger->expects(self::never())->method('critical');
+
+        self::assertSame($this->redirect, $this->controller->execute());
+        // The role is resolved before provisioning so a refused login creates no admin.
+        self::assertSame(['resolve', 'provision', 'assign'], $calls);
+    }
+
+    public function testRefusesWithoutProvisioningWhenNoRoleResolves(): void
+    {
+        $this->withParams(['code' => 'the-code', 'state' => 'the-state']);
+        $this->expectLoginRedirect();
+
+        $this->handler->expects(self::once())
+            ->method('handle')
+            ->willReturn(new Identity('user-1', 'user@example.com', 'U', ['eng']));
+        $this->roleAssigner->expects(self::once())
+            ->method('resolve')
+            ->willThrowException(new LocalizedException(
+                __('No admin role is mapped for your identity provider groups. Contact your administrator.')
+            ));
+
+        $this->logger->expects(self::never())->method('critical');
+        $this->messageManager->expects(self::once())
+            ->method('addErrorMessage')
+            ->with('No admin role is mapped for your identity provider groups. Contact your administrator.');
 
         self::assertSame($this->redirect, $this->controller->execute());
     }
@@ -208,6 +249,7 @@ class CallbackTest extends TestCase
 
         $identity = new Identity('user-1', null, null, []);
         $this->handler->expects(self::once())->method('handle')->willReturn($identity);
+        $this->roleAssigner->method('resolve')->willReturn('5');
         $this->userProvisioner->expects(self::once())
             ->method('provision')
             ->with($identity)

@@ -2,6 +2,7 @@
 <!--
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -52,7 +53,7 @@
                        showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Enforce SSO</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
-                    <comment>Disables the native admin login form. Keep break-glass on to stay recoverable.</comment>
+                    <comment>Blocks native password login on every admin path (login form, REST admin token).</comment>
                     <depends>
                         <field id="enabled">1</field>
                     </depends>
@@ -61,16 +62,25 @@
                        showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Allow Break-Glass Login</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
-                    <comment>Keeps a guarded local-admin login path available while SSO is enforced.</comment>
+                    <comment>Lets the usernames listed below keep native password login under Enforce SSO.</comment>
                     <depends>
                         <field id="enforce_sso">1</field>
+                    </depends>
+                </field>
+                <field id="break_glass_usernames" translate="label comment" type="textarea" sortOrder="65"
+                       showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Break-Glass Usernames</label>
+                    <comment>One admin username per line (or comma-separated). Empty = no break-glass.</comment>
+                    <depends>
+                        <field id="break_glass">1</field>
                     </depends>
                 </field>
                 <field id="group_role_map" translate="label comment" type="textarea" sortOrder="70"
                        showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Group to Role Map</label>
-                    <comment><![CDATA[One rule per line as <code>idp_group=role_id</code>.
-                        Blank lines and <code>#</code> comments are ignored.]]></comment>
+                    <comment>
+                        <![CDATA[One <code>idp_group=role_id</code> per line; <code>#</code> comments ignored.]]>
+                    </comment>
                     <depends>
                         <field id="enabled">1</field>
                     </depends>
@@ -78,8 +88,9 @@
                 <field id="default_role" translate="label comment" type="text" sortOrder="80"
                        showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Default Role</label>
-                    <comment><![CDATA[ACL role id assigned when no IdP group matches a rule above.
-                        Leave empty to deny — an unmapped user gets no role.]]></comment>
+                    <comment>
+                        <![CDATA[Role id when no group matches. Leave empty to refuse SSO login for unmapped users.]]>
+                    </comment>
                     <depends>
                         <field id="enabled">1</field>
                     </depends>

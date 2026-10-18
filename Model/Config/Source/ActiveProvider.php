@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -29,13 +30,13 @@ class ActiveProvider implements OptionSourceInterface
     /**
      * @inheritDoc
      *
-     * @return array<int,array{value:string,label:\Magento\Framework\Phrase|string}>
+     * @return array<int,array{value:string,label:\Magento\Framework\Phrase}>
      */
     public function toOptionArray(): array
     {
         $options = [['value' => '', 'label' => __('-- Please Select --')]];
         foreach ($this->presetRegistry->getAll() as $preset) {
-            $options[] = ['value' => $preset->getCode(), 'label' => $preset->getLabel()];
+            $options[] = ['value' => $preset->getCode(), 'label' => __($preset->getLabel())];
         }
 
         return $options;

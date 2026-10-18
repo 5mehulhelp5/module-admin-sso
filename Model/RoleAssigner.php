@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -9,6 +10,7 @@ namespace DmLab\AdminSso\Model;
 use DmLab\SsoCore\Api\Data\IdentityInterface;
 use DmLab\SsoCore\Model\Mapping\MappingEngine;
 use Magento\Authorization\Model\RoleFactory;
+use Magento\Framework\Exception\LocalizedException;
 use Magento\User\Model\ResourceModel\User as UserResource;
 use Magento\User\Model\User;
 
@@ -20,11 +22,11 @@ use Magento\User\Model\User;
  * {@see MappingEngine} resolves the groups against them, falling back to the
  * configured default role when nothing matches. A Magento admin user holds a
  * single role, so the first resolved role wins. When neither a rule nor a default
- * applies the user's ACL role is stripped (deny) — removing a user from their IdP
- * groups revokes their admin access at the next login.
+ * applies the SSO login is refused — the stored role is never demoted
+ * (deprovisioning is SCIM's job).
  *
- * Runs on every SSO login — on JIT create it grants the initial role, on
- * subsequent logins it refreshes it so IdP group changes take effect. Saving with
+ * The role is resolved before provisioning so a refused login creates no admin,
+ * then assigned on every SSO login so IdP group changes take effect. Saving with
  * a `role_id` set makes the user resource replace the `authorization_role` link
  * (see Magento\User\Model\ResourceModel\User::_afterSave).
  *
@@ -47,81 +49,46 @@ class RoleAssigner
     }
 
     /**
-     * Resolve and apply the ACL role for the identity onto the admin user.
+     * The single existing ACL role id for the identity's groups.
      *
-     * A no-op when the resolved role already matches the user's current one. When
-     * no role resolves at all the current role is stripped (deny); a user that
-     * already holds none is left untouched.
-     *
-     * @param User $user persisted admin user to assign the role to
      * @param IdentityInterface $identity verified identity from sso-core
+     * @return string
+     * @throws LocalizedException when no rule or default applies, or the role does not exist
      */
-    public function assign(User $user, IdentityInterface $identity): void
-    {
-        $roleId = $this->resolveRoleId($identity);
-        $currentRoleId = (string)$user->getRole()->getId();
-
-        if ($roleId === null) {
-            // No rule matched and no default configured → deny. Strip the current
-            // ACL role so removing a user from their IdP groups revokes admin
-            // access on the next SSO login (a fresh JIT user has none to strip).
-            if ($currentRoleId !== '') {
-                $this->revokeRole($user);
-            }
-            return;
-        }
-
-        if ($currentRoleId === $roleId) {
-            return;
-        }
-
-        // A configured role id that no longer exists must not be assigned: the
-        // user resource clears the current authorization_role link before it
-        // re-creates one, and _createUserRole() no-ops for a missing role — so a
-        // typo'd map/default would strip a working admin's role (self-lockout
-        // under Enforce-SSO). Keep the current role instead (deny).
-        if (!$this->roleExists($roleId)) {
-            return;
-        }
-
-        // `role_id` drives the user resource to replace the authorization_role
-        // link on save (see the class docblock).
-        $user->setData('role_id', (int)$roleId);
-        $this->userResource->save($user);
-    }
-
-    /**
-     * Strip the admin user's ACL role.
-     *
-     * Saving with `role_id` 0 makes the user resource clear the
-     * `authorization_role` link and create no replacement (see
-     * ResourceModel\User::_afterSave / _createUserRole), leaving the admin with no
-     * backend access.
-     *
-     * @param User $user
-     */
-    private function revokeRole(User $user): void
-    {
-        $user->setData('role_id', 0);
-        $this->userResource->save($user);
-    }
-
-    /**
-     * The single ACL role id for the identity's groups.
-     *
-     * Null when no group maps and no default role is configured.
-     *
-     * @param IdentityInterface $identity
-     */
-    private function resolveRoleId(IdentityInterface $identity): ?string
+    public function resolve(IdentityInterface $identity): string
     {
         $roles = $this->mappingEngine->resolve(
             $identity->getGroups(),
             $this->config->getGroupRoleMap(),
             $this->config->getDefaultRoleId()
         );
+        $roleId = $roles[0] ?? null;
 
-        return $roles[0] ?? null;
+        // A typo'd / deleted role id must not be assigned: the user resource would
+        // clear the current authorization_role link and grant nothing.
+        if ($roleId === null || !$this->roleExists($roleId)) {
+            throw new LocalizedException(
+                __('No admin role is mapped for your identity provider groups. Contact your administrator.')
+            );
+        }
+
+        return $roleId;
+    }
+
+    /**
+     * Put the admin user on the given role; a no-op when already on it.
+     *
+     * @param User $user persisted admin user
+     * @param string $roleId role id from {@see resolve()}
+     */
+    public function assign(User $user, string $roleId): void
+    {
+        if ((string)$user->getRole()->getId() === $roleId) {
+            return;
+        }
+
+        $user->setData('role_id', (int)$roleId);
+        $this->userResource->save($user);
     }
 
     /**

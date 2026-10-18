@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -10,6 +11,8 @@ use DmLab\AdminSso\Model\ActiveProviderResolver;
 use DmLab\AdminSso\Model\Config;
 use DmLab\SsoCore\Api\AuthorizationStateStorageInterface;
 use DmLab\SsoCore\Api\Data\IdentityInterface;
+use DmLab\SsoCore\Api\DiscoveryIssuerPolicyInterface;
+use DmLab\SsoCore\Api\ProviderPresetInterface;
 use DmLab\SsoCore\Model\Oidc\DiscoveryClient;
 use DmLab\SsoCore\Model\Oidc\IdentityFactory;
 use DmLab\SsoCore\Model\Oidc\IdTokenValidator;
@@ -96,7 +99,8 @@ class CallbackHandler
         }
 
         $metadata = $this->discoveryClient->discover(
-            $preset->buildDiscoveryUrl($this->presetConfig())
+            $preset->buildDiscoveryUrl($this->presetConfig()),
+            $this->requiresIssuerMatch($preset)
         );
 
         $tokenResponse = $this->tokenClient->exchangeCode(
@@ -110,7 +114,7 @@ class CallbackHandler
 
         $claims = $this->idTokenValidator->validate(
             $tokenResponse->getIdToken(),
-            $this->jwksClient->getKeySet($metadata->getJwksUri()),
+            $this->jwksClient->getKeySetForToken($metadata->getJwksUri(), $tokenResponse->getIdToken()),
             $metadata->getIssuer(),
             $clientId,
             $authState->getNonce()
@@ -131,6 +135,18 @@ class CallbackHandler
         return [
             'client_id' => $this->config->getClientId(),
         ];
+    }
+
+    /**
+     * Strict discovery issuer match unless the preset opts out; mirrors
+     * {@see AuthorizationStarter::requiresIssuerMatch()}.
+     *
+     * @param ProviderPresetInterface $preset
+     */
+    private function requiresIssuerMatch(ProviderPresetInterface $preset): bool
+    {
+        return !$preset instanceof DiscoveryIssuerPolicyInterface
+            || $preset->requiresIssuerMatch($this->presetConfig());
     }
 
     /**

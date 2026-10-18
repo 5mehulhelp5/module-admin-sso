@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -73,6 +74,36 @@ class ConfigTest extends TestCase
         self::assertNull($this->config([Config::XML_PATH_CLIENT_SECRET => ''])->getClientSecret());
         // Stored but decrypts to empty (e.g. key rotation) → null, not a stray value.
         self::assertNull($this->config([Config::XML_PATH_CLIENT_SECRET => 'stale'])->getClientSecret());
+    }
+
+    public function testGetBreakGlassUsernamesSplitsOnNewlinesAndCommas(): void
+    {
+        $config = $this->config([Config::XML_PATH_BREAK_GLASS_USERNAMES => "admin\r\nops, backup\nlast"]);
+
+        self::assertSame(['admin', 'ops', 'backup', 'last'], $config->getBreakGlassUsernames());
+    }
+
+    public function testGetBreakGlassUsernamesDropsBlanksAndWhitespace(): void
+    {
+        $config = $this->config([Config::XML_PATH_BREAK_GLASS_USERNAMES => "  admin  \n\n , ,\t\n ops "]);
+
+        self::assertSame(['admin', 'ops'], $config->getBreakGlassUsernames());
+    }
+
+    public function testGetBreakGlassUsernamesFoldsCaseAndDeduplicates(): void
+    {
+        $config = $this->config([Config::XML_PATH_BREAK_GLASS_USERNAMES => "Admin\nADMIN,admin\nÄdmin"]);
+
+        self::assertSame(['admin', 'ädmin'], $config->getBreakGlassUsernames());
+    }
+
+    public function testGetBreakGlassUsernamesEmptyWhenUnsetOrBlank(): void
+    {
+        self::assertSame([], $this->config([])->getBreakGlassUsernames());
+        self::assertSame(
+            [],
+            $this->config([Config::XML_PATH_BREAK_GLASS_USERNAMES => " \n , "])->getBreakGlassUsernames()
+        );
     }
 
     public function testGetGroupRoleMapParsesLines(): void

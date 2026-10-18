@@ -1,6 +1,7 @@
 <?php
 /**
  * Copyright © DMLab. All rights reserved.
+ * Licensed under the Open Software License version 3.0 (OSL-3.0). See LICENSE.
  */
 declare(strict_types=1);
 
@@ -21,9 +22,10 @@ use Psr\Log\LoggerInterface;
 
 /**
  * Handles the admin OIDC redirect back from the IdP: surfaces IdP error responses,
- * hands the `code`/`state` to {@see CallbackHandler} for a verified identity, then
- * provisions the matching admin user (JIT), assigns its ACL role from the IdP
- * groups, and establishes the backend session.
+ * hands the `code`/`state` to {@see CallbackHandler} for a verified identity, resolves
+ * its ACL role from the IdP groups, provisions the matching admin user (JIT), assigns
+ * the role, and establishes the backend session. The role is resolved first so a
+ * refused login creates or links no admin.
  *
  * Extends the backend Auth controller so it is reachable before login (no ACL).
  * Any failure is turned into a login-page error message so the admin is never left
@@ -83,8 +85,9 @@ class Callback extends Auth implements HttpGetActionInterface
 
         try {
             $identity = $this->callbackHandler->handle($code, $state);
+            $roleId = $this->roleAssigner->resolve($identity);
             $user = $this->userProvisioner->provision($identity);
-            $this->roleAssigner->assign($user, $identity);
+            $this->roleAssigner->assign($user, $roleId);
             $this->adminSessionCreator->create($user);
         } catch (LocalizedException $e) {
             $this->messageManager->addErrorMessage($e->getMessage());
